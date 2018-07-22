@@ -10,6 +10,10 @@ import static org.assertj.core.api.Assertions.*;
 import java.util.Map;
 
 import org.junit.Test;
+import org.springside.modules.metrics.metric.Counter;
+import org.springside.modules.metrics.metric.Histogram;
+import org.springside.modules.metrics.metric.HistogramMetric;
+import org.springside.modules.metrics.metric.Timer;
 
 public class MetricRegistryTest {
 
@@ -76,16 +80,6 @@ public class MetricRegistryTest {
 
 		assertThat(metric.pcts.get(60d)).isEqualTo(60);
 		assertThat(metric.pcts.get(70d)).isEqualTo(70);
-
-		// default 90
-		Histogram histogramWithDefaultPcts = metricRegistry.histogram(MetricRegistry.name("UserService",
-				"getUser.histogram.default"));
-		for (int i = 1; i <= 100; i++) {
-			histogramWithDefaultPcts.update(i);
-		}
-
-		metric = histogramWithDefaultPcts.calculateMetric();
-		assertThat(metric.pcts.get(90d)).isEqualTo(90);
 
 		// new default 50
 		metricRegistry.setDefaultPcts(new Double[] { 50d });

@@ -21,15 +21,22 @@ import javax.net.SocketFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springside.modules.metrics.Counter;
-import org.springside.modules.metrics.CounterMetric;
-import org.springside.modules.metrics.Histogram;
-import org.springside.modules.metrics.HistogramMetric;
 import org.springside.modules.metrics.MetricRegistry;
-import org.springside.modules.metrics.Timer;
-import org.springside.modules.metrics.TimerMetric;
+import org.springside.modules.metrics.Reporter;
+import org.springside.modules.metrics.metric.Counter;
+import org.springside.modules.metrics.metric.CounterMetric;
+import org.springside.modules.metrics.metric.Gauge;
+import org.springside.modules.metrics.metric.Histogram;
+import org.springside.modules.metrics.metric.HistogramMetric;
+import org.springside.modules.metrics.metric.Timer;
+import org.springside.modules.metrics.metric.TimerMetric;
 
+/**
+ * 输出到Graphite.
+ */
 public class GraphiteReporter implements Reporter {
+
+	public static final String DEFAULT_PREFIX = "metrics";
 
 	private static final Pattern WHITESPACE = Pattern.compile("[\\s]+");
 	private static final Charset UTF_8 = Charset.forName("UTF-8");
@@ -47,7 +54,7 @@ public class GraphiteReporter implements Reporter {
 	private GraphiteConnStatus graphiteConnStatus = GraphiteConnStatus.CONN_OK;
 
 	public GraphiteReporter(InetSocketAddress address) {
-		this(address, "metrics");
+		this(address, DEFAULT_PREFIX);
 	}
 
 	public GraphiteReporter(InetSocketAddress address, String prefix) {
@@ -57,21 +64,26 @@ public class GraphiteReporter implements Reporter {
 	}
 
 	@Override
-	public void report(Map<String, Counter> counters, Map<String, Histogram> histograms, Map<String, Timer> timers) {
+	public void report(Map<String, Gauge> gauges, Map<String, Counter> counters, Map<String, Histogram> histograms,
+			Map<String, Timer> timers) {
 		try {
 			connect();
 			long timestamp = System.currentTimeMillis() / 1000;
 
+			for (Map.Entry<String, Gauge> entry : gauges.entrySet()) {
+				reportGauge(entry.getKey(), entry.getValue().latestMetric, timestamp);
+			}
+
 			for (Map.Entry<String, Counter> entry : counters.entrySet()) {
-				reportCounter(entry.getKey(), entry.getValue().snapshot, timestamp);
+				reportCounter(entry.getKey(), entry.getValue().latestMetric, timestamp);
 			}
 
 			for (Map.Entry<String, Histogram> entry : histograms.entrySet()) {
-				reportHistogram(entry.getKey(), entry.getValue().snapshot, timestamp);
+				reportHistogram(entry.getKey(), entry.getValue().latestMetric, timestamp);
 			}
 
 			for (Map.Entry<String, Timer> entry : timers.entrySet()) {
-				reportTimer(entry.getKey(), entry.getValue().snapshot, timestamp);
+				reportTimer(entry.getKey(), entry.getValue().latestMetric, timestamp);
 			}
 
 			flush();
@@ -88,14 +100,18 @@ public class GraphiteReporter implements Reporter {
 		}
 	}
 
+	private void reportGauge(String name, Number gauge, long timestamp) throws IOException {
+		send(MetricRegistry.name(prefix, name, "gauge"), format(gauge), timestamp);
+	}
+
 	private void reportCounter(String name, CounterMetric counter, long timestamp) throws IOException {
-		send(MetricRegistry.name(prefix, name, "count"), format(counter.lastCount), timestamp);
+		send(MetricRegistry.name(prefix, name, "count"), format(counter.latestCount), timestamp);
 	}
 
 	private void reportHistogram(String name, HistogramMetric histogram, long timestamp) throws IOException {
 		send(MetricRegistry.name(prefix, name, "min"), format(histogram.min), timestamp);
 		send(MetricRegistry.name(prefix, name, "max"), format(histogram.max), timestamp);
-		send(MetricRegistry.name(prefix, name, "mean"), format(histogram.mean), timestamp);
+		send(MetricRegistry.name(prefix, name, "avg"), format(histogram.avg), timestamp);
 		for (Entry<Double, Long> pct : histogram.pcts.entrySet()) {
 			send(MetricRegistry.name(prefix, name, format(pct.getKey()).replace('.', '_')), format(pct.getValue()),
 					timestamp);
@@ -103,11 +119,11 @@ public class GraphiteReporter implements Reporter {
 	}
 
 	private void reportTimer(String name, TimerMetric timer, long timestamp) throws IOException {
-		send(MetricRegistry.name(prefix, name, "count"), format(timer.counterMetric.lastCount), timestamp);
+		send(MetricRegistry.name(prefix, name, "count"), format(timer.counterMetric.latestCount), timestamp);
 
 		send(MetricRegistry.name(prefix, name, "min"), format(timer.histogramMetric.min), timestamp);
 		send(MetricRegistry.name(prefix, name, "max"), format(timer.histogramMetric.max), timestamp);
-		send(MetricRegistry.name(prefix, name, "mean"), format(timer.histogramMetric.mean), timestamp);
+		send(MetricRegistry.name(prefix, name, "avg"), format(timer.histogramMetric.avg), timestamp);
 		for (Entry<Double, Long> pct : timer.histogramMetric.pcts.entrySet()) {
 			send(MetricRegistry.name(prefix, name, format(pct.getKey()).replace('.', '_')), format(pct.getValue()),
 					timestamp);
@@ -160,6 +176,21 @@ public class GraphiteReporter implements Reporter {
 		return String.format(Locale.US, "%2.2f", v);
 	}
 
+	private String format(Number o) {
+		if (o instanceof Float) {
+			return format(((Float) o).doubleValue());
+		} else if (o instanceof Double) {
+			return format(((Double) o).doubleValue());
+		} else if (o instanceof Short) {
+			return format(((Short) o).longValue());
+		} else if (o instanceof Integer) {
+			return format(((Integer) o).longValue());
+		} else if (o instanceof Long) {
+			return format(((Long) o).longValue());
+		}
+		return null;
+	}
+
 	private String sanitize(String s) {
 		return WHITESPACE.matcher(s).replaceAll("-");
 	}
@@ -180,5 +211,9 @@ public class GraphiteReporter implements Reporter {
 
 	private enum GraphiteConnStatus {
 		CONN_OK, CONN_NOK
+	}
+
+	public void setPrefix(String prefix) {
+		this.prefix = prefix;
 	}
 }
